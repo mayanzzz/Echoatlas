@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>EchoAtlas - Explorer Timeline</title>
+    <!-- Supabase SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Indie+Flower&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --sea-blue: #d8f1f5;       /* base light blue */
+            --sea-blue-hover: #cbe7eb; /* slightly darker on hover */
+            --land-pink: #f19ec2;      /* pink */
+            --land-pink-hover: #e88ab0; /* slightly darker on hover */
+            --visited-border: #8b3a5d; 
+            --ink-black: #1e1b4b;
+            --paper-base: #fefcf9;     /* paper background */
+            --accent-blue: #0ea5e9;
+        }
+
+        body { 
+            background-color: var(--paper-base); 
+            margin: 0; overflow: hidden;
+            font-family: 'Indie Flower', cursive;
+        }
+
+        /* paper texture overlay */
+        .paper-overlay {
+            position: fixed; inset: 0; pointer-events: none;
+            mix-blend-mode: multiply; opacity: 0.65; z-index: 100;
+        }
+
+        /* login overlay */
+        #login-overlay { 
+            position: fixed; inset: 0; background: rgba(224, 247, 250, 0.95); 
+            display: flex; align-items: center; justify-content: center; z-index: 9000; 
+            backdrop-filter: blur(8px); 
+        }
+        .login-card { background: white; border: 4px solid var(--ink-black); padding: 40px; box-shadow: 15px 15px 0px var(--ink-black); text-align: center; width: 400px; }
+
+        /* tooltip */
+        #tooltip { position: fixed; pointer-events: none; opacity: 0; z-index: 5000; background: white; border: 2px solid var(--ink-black); padding: 12px 14px; box-shadow: 4px 4px 0px var(--ink-black); transition: opacity 0.2s; min-width: 200px; border-radius: 2px; font-family: inherit; }
+
+        /* timeline drawer */
+        #timeline-drawer { 
+            position: fixed; right: 0; top: 0; bottom: 0; width: 50vw; 
+            background: var(--paper-base); border-left: 5px solid var(--ink-black); 
+            z-index: 4000; transform: translateX(100%); transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1); 
+            overflow-y: auto; padding: 60px 40px; box-shadow: -20px 0px 50px rgba(0,0,0,0.1); 
+        }
+        #timeline-drawer.open { transform: translateX(0); }
+        .timeline-container { position: relative; border-left: 4px dashed var(--ink-black); margin-left: 20px; padding-left: 50px; }
+        .timeline-item { position: relative; margin-bottom: 50px; cursor: pointer; text-align: left; }
+        .timeline-dot { position: absolute; left: -61px; top: 8px; width: 20px; height: 20px; background: var(--land-pink); border-radius: 50%; border: 3px solid var(--ink-black); }
+        .timeline-country { font-family: 'Permanent Marker'; font-size: 2rem; color: #4338ca; }
+        .timeline-date { font-size: 0.9375rem; font-weight: 700; opacity: 0.7; }
+        .timeline-activities { font-size: 0.9375rem; }
+        .timeline-delete-btn { font-size: 0.75rem; }
+        .timeline-item:hover { opacity: 0.95; }
+        .timeline-item:hover .timeline-country { color: #3730a3; }
+        .timeline-item.hidden { display: none !important; }
+        .timeline-year-filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 20px; padding: 12px 0; border-bottom: 2px dashed rgba(30, 27, 75, 0.2); }
+        .timeline-year-chip { font-family: 'Indie Flower', cursive; font-size: 0.9375rem; font-weight: 700; padding: 6px 14px; border-radius: 9999px; border: 2px solid #c7d2fe; background: #fff; color: #4338ca; cursor: pointer; transition: border-color 0.2s, background 0.2s, color 0.2s; }
+        .timeline-year-chip:hover { border-color: var(--land-pink); background: #fdf2f8; color: #8b3a5d; }
+        .timeline-year-chip.active { background: var(--land-pink); color: #fff; border-color: var(--ink-black); }
+        
+        /* timeline note bubble */
+        .timeline-note-bubble { 
+            margin-top: 15px; padding: 12px 20px; background: #fff; 
+            border-left: 5px solid var(--land-pink); 
+            box-shadow: 5px 5px 0px rgba(0,0,0,0.05); 
+            font-size: 1.1rem; color: var(--ink-black); font-style: italic;
+        }
+
+        /* heart rating */
+        .heart-rating { display: inline-flex; gap: 4px; cursor: pointer; padding: 10px 0; }
+        .heart { font-size: 32px; position: relative; color: #eee; pointer-events: none; }
+        .heart.full { color: var(--land-pink); }
+        .heart.half::after { content: "❤"; position: absolute; left: 0; width: 50%; overflow: hidden; color: var(--land-pink); }
+
+        #map-group { mix-blend-mode: multiply; }
+        .country { fill: var(--sea-blue); stroke: var(--ink-black); stroke-width: 1px; stroke-dasharray: 4, 3; cursor: pointer; transition: fill 0.3s, stroke-width 0.25s, stroke-dasharray 0.2s; }
+        .country-hover { fill: var(--sea-blue-hover) !important; stroke-dasharray: 0; stroke-width: 1.5px; }
+        .visited { fill: var(--land-pink) !important; stroke: var(--visited-border) !important; stroke-width: 2px !important; stroke-dasharray: 0 !important; }
+        .country-hover.visited { fill: var(--land-pink-hover) !important; stroke-dasharray: 0; stroke-width: 2.5px !important; }
+
+        .stats-board { position: fixed; left: 40px; bottom: 40px; background: #fff; border: 3px solid var(--ink-black); padding: 18px 28px; z-index: 100; transform: rotate(-1deg); box-shadow: 8px 8px 0px var(--ink-black); font-size: 1rem; }
+        .stats-board .stats-title { font-family: 'Permanent Marker'; font-size: 1.35rem; }
+        .stats-board .stats-row { font-size: 1.05rem; }
+        .stats-board .stats-meta { font-size: 0.8125rem; font-family: 'Indie Flower', cursive; }
+        .stats-pink { color: var(--land-pink); font-weight: 900; }
+        .stats-blue { color: var(--accent-blue); font-weight: 900; }
+        .stats-board button:hover { background: #fdf2f8; border-radius: 2px; }
+        .btn-timeline-toggle { transition: transform 0.2s, box-shadow 0.2s; }
+        .btn-timeline-toggle:hover { transform: translate(2px, -1px); box-shadow: 8px 8px 0 var(--ink-black); }
+        .btn-timeline-toggle:active { transform: translate(4px, 4px); box-shadow: 2px 2px 0 var(--ink-black); }
+        .btn-update-journey { transition: background 0.2s, transform 0.15s, box-shadow 0.15s; }
+        .btn-update-journey:hover { background: #fce7f3; }
+        .btn-update-journey:active { transform: translate(2px, 2px); box-shadow: 6px 6px 0 var(--ink-black); }
+        .timeline-close-btn { transition: color 0.2s, background 0.2s; border-radius: 4px; padding: 4px; }
+        .timeline-close-btn:hover { color: var(--visited-border); background: #fdf2f8; }
+        .panel-visit-row { transition: background 0.2s, border-color 0.2s; }
+        .panel-close-btn:focus-visible { outline: 2px solid var(--ink-black); outline-offset: 2px; }
+        .btn-timeline-toggle:focus-visible { outline: 2px solid var(--ink-black); outline-offset: 2px; }
+        .btn-update-journey:focus-visible { outline: 2px solid var(--ink-black); outline-offset: 2px; }
+        .notebook { position: fixed; right: 40px; top: 120px; width: 340px; background: #fff; border: 3px solid var(--ink-black); box-shadow: 12px 12px 0px var(--ink-black); padding: 26px; z-index: 1000; border-radius: 2px; }
+        .panel-section-label { font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.08em; color: var(--ink-black); opacity: 0.65; }
+        .activity-chip { border: 2px solid #e5e7eb; padding: 6px 12px; border-radius: 9999px; font-size: 0.8125rem; cursor: pointer; transition: border-color 0.2s, background 0.2s; background: white; }
+        .activity-chip:hover { border-color: var(--land-pink); background: #fdf2f8; }
+        .activity-chip.active { background: var(--land-pink); color: white; border-color: var(--ink-black); }
+        #loading { position: fixed; inset: 0; background: #fff; display: flex; align-items: center; justify-content: center; z-index: 9999; font-size: 2rem; font-family: 'Permanent Marker'; color: var(--ink-black); }
+    </style>
+</head>
+<body>
+
+    <div id="login-overlay">
+        <div class="login-card hand-drawn text-left">
+            <h2 class="text-4xl font-bold mb-4" style="font-family: 'Permanent Marker';">WHO'S DREAMING?</h2>
+            <p class="text-sm mb-6 opacity-60 italic text-indigo-900">Supabase is under maintenance. Click below to enter offline mode.</p>
+            <input type="email" id="explorer-email" placeholder="yourname@echo.com" class="w-full border-b-4 border-black p-2 mb-8 outline-none text-xl text-center bg-transparent">
+            <button id="login-btn" onclick="login()" class="w-full bg-black text-white py-4 font-bold hover:bg-pink-500 transition mb-4">START CLOUD JOURNEY</button>
+            <div class="text-center">
+                <button onclick="enterLocalMode()" class="text-xs underline text-indigo-600 font-bold">Enter offline mode (data stored locally) ➔</button>
+            </div>
+            <p id="login-status" class="mt-4 text-xs text-red-500 text-center"></p>
+        </div>
+    </div>
+
+    <div id="loading" style="display:none">Opening your dream atlas... 🕊️</div>
+
+    <div class="stats-board">
+        <h3 class="stats-title text-indigo-950 text-left mb-2">Adventure Stats</h3>
+        <div class="stats-row space-y-1.5 text-left text-indigo-900">
+            <p>Explored: <span id="stat-count" class="stats-pink">0</span> Countries</p>
+            <p>Progress: <span id="stat-progress" class="stats-blue">0</span>%</p>
+        </div>
+        <div class="stats-meta mt-3 pt-3 border-t border-dashed border-indigo-200 text-left opacity-90">
+            <p class="tracking-wide text-indigo-800">Explorer: <span id="current-user-display">Guest</span></p>
+            <button type="button" onclick="logout()" class="text-pink-600 font-bold hover:underline mt-1 block italic">Logout / Switch</button>
+        </div>
+    </div>
+
+    <div id="tooltip"></div>
+
+    <button type="button" onclick="toggleTimeline()" class="btn-timeline-toggle fixed right-8 top-8 z-[3000] bg-white border-2 border-black px-5 py-2.5 shadow-[6px_6px_0px_#000] font-bold">
+        📜 FOOTPRINTS TIMELINE
+    </button>
+
+    <div id="timeline-drawer">
+        <div class="flex justify-between items-center mb-16">
+            <h2 class="text-6xl font-bold italic text-indigo-900" style="font-family: 'Permanent Marker'; border-bottom: 6px solid var(--land-pink); padding-bottom: 12px;">MY JOURNEY</h2>
+            <button type="button" onclick="toggleTimeline()" class="timeline-close-btn text-4xl font-bold" aria-label="Close">✕</button>
+        </div>
+        <div id="timeline-year-filter" class="timeline-year-filter hidden">
+            <span class="text-indigo-700/80 text-sm font-bold mr-1" style="font-family: 'Indie Flower', cursive;">By year:</span>
+            <div id="timeline-year-chips" class="flex flex-wrap gap-2"></div>
+        </div>
+        <div class="timeline-container" id="timeline-list"></div>
+        <p id="timeline-empty-hint" class="hidden text-indigo-700/70 italic text-center py-12 text-lg ml-5 max-w-sm mx-auto" style="font-family: 'Indie Flower', cursive;">No footprints yet — click a country on the map to start</p>
+    </div>
+
+    <div class="fixed top-10 left-10 z-50 pointer-events-none">
+        <h1 class="text-6xl font-bold text-indigo-950 ml-16" style="font-family: 'Permanent Marker';">EchoAtlas</h1>
+        <p class="text-xl text-pink-500 italic ml-16 font-bold">Painting memories across time...</p>
+    </div>
+
+    <svg id="canvas" width="100vw" height="100vh">
+        <defs>
+            <filter id="paper-texture" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="4" result="noise" /><feDiffuseLighting in="noise" lighting-color="#fff" surfaceScale="2"><feDistantLight azimuth="45" elevation="45" /></feDiffuseLighting></filter>
+            <filter id="wobble"><feTurbulence type="fractalNoise" baseFrequency="0.06" numOctaves="2" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="2.5"/></filter>
+        </defs>
+        <rect width="100%" height="100%" fill="var(--paper-base)" />
+        <g id="map-group" class="hand-drawn"></g>
+        <rect width="100%" height="100%" class="paper-overlay" filter="url(#paper-texture)" />
+    </svg>
+
+    <div id="panel" class="notebook hidden text-left">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-3xl font-bold italic text-indigo-900 border-b-2 border-pink-400 pb-1" id="country-name">Land</h2>
+            <button type="button" onclick="closePanel()" class="panel-close-btn text-2xl hover:text-pink-500 transition-colors rounded px-1 py-0.5 hover:bg-pink-50" aria-label="Close">✕</button>
+        </div>
+        <div class="space-y-6 text-sm">
+            <section><label class="panel-section-label block mb-1.5">📅 Arrival Date</label>
+            <input type="date" id="visit-date" class="w-full border-b-2 border-black outline-none bg-transparent py-1.5 font-bold focus:border-pink-400 transition-colors"></section>
+            
+            <section><label class="panel-section-label block mb-1.5">❤ Heart Rating (Click to Lock)</label>
+            <div class="heart-rating" id="heart-input">
+                <span class="heart">❤</span><span class="heart">❤</span><span class="heart">❤</span><span class="heart">❤</span><span class="heart">❤</span>
+            </div>
+            <div id="rating-val" class="text-pink-600 font-bold text-xs mt-1">0.0 Hearts</div></section>
+
+            <section><label class="panel-section-label block mb-2">🏃 Activities</label>
+            <div class="grid grid-cols-2 gap-2" id="activity-grid">
+                <span class="activity-chip" data-emoji="🤿">Diving</span><span class="activity-chip" data-emoji="🥾">Hiking</span>
+                <span class="activity-chip" data-emoji="🚶">Citywalk</span><span class="activity-chip" data-emoji="🖼️">Museum</span>
+                <span class="activity-chip" data-emoji="🏛️">Heritage</span><span class="activity-chip" data-emoji="🍜">Food</span>
+                <span class="activity-chip" data-emoji="🌲">Nature</span><span class="activity-chip" data-emoji="🚗">Roadtrip</span>
+            </div></section>
+
+            <section><label class="panel-section-label block mb-2 text-pink-700">✨ Say something</label>
+            <div class="flex items-center gap-4 bg-gray-50/50 p-3 border border-black/10 rounded-xl">
+                <div class="shrink-0"><input type="text" id="custom-emoji" value="✨" class="w-11 h-11 text-center bg-white border-2 border-black rounded-full text-2xl outline-none cursor-pointer" maxlength="2" onclick="this.select()"></div>
+                <div class="flex-1 text-left"><input type="text" id="custom-label" placeholder="What's on your mind?" class="w-full bg-transparent border-b-2 border-black/20 focus:border-pink-400 outline-none text-sm py-2 transition-colors font-medium"></div>
+            </div></section>
+
+            <section id="panel-existing-visits" class="border-t border-dashed border-gray-300 pt-4 mt-4">
+                <label class="panel-section-label block mb-2">📋 Existing visits (delete)</label>
+                <div id="panel-visits-list" class="space-y-2 text-left"></div>
+            </section>
+        </div>
+        <button type="button" onclick="saveDream()" class="btn-update-journey w-full border-4 border-black py-4 font-bold mt-8 shadow-[8px_8px_0px_#000] uppercase text-sm tracking-widest text-indigo-950">Update Journey</button>
+    </div>
+
+    <script>
+        // --- 1. init ---
+        const SB_URL = 'https://nzvvllkrvvfsyckvrkx.supabase.co';
+        const SB_KEY = 'sb_publishable_DrJ-pz500GRFMs1E1vUGMQ_rfuCE8T3eH';
+        let client;
+        try { client = window.supabase.createClient(SB_URL, SB_KEY); } catch(e) { console.error("Supabase load failed"); }
+
+        const svg = d3.select("#canvas"), g = svg.append("g").attr("id", "map-group");
+        let selectedFeature = null, currentRating = 0, clickPos = [0, 0];
+        let userData = {};
+        const CHINA_GROUP = ['CHN', 'TWN', 'HKG', 'MAC'];
+
+        const projection = d3.geoMercator().scale(window.innerWidth / 6.2).translate([window.innerWidth / 2.2, window.innerHeight / 1.5]);
+        const pathGen = d3.geoPath().projection(projection);
+        const zoom = d3.zoom().scaleExtent([1, 25]).on("zoom", (e) => g.attr("transform", e.transform));
+        svg.call(zoom);
+
+        // --- 2. login (offline / cloud) ---
+        async function login() {
+            const emailInput = document.getElementById('explorer-email');
+            const email = emailInput.value.trim().toLowerCase();
+            const btn = document.getElementById('login-btn');
+            const status = document.getElementById('login-status');
+            if (!email || !email.includes('@')) { status.innerText = "Please enter a valid email!"; return; }
+            
+            btn.innerText = "Syncing memories..."; btn.disabled = true;
+
+            try {
+                const { data, error } = await client.from('user_memories').select('map_data').eq('user_email', email).maybeSingle();
+                if (error) throw error;
+                if (data) { userData = data.map_data; } else { await client.from('user_memories').insert({ user_email: email, map_data: {} }); }
+                
+                localStorage.setItem('echoatlas_email', email);
+                document.getElementById('current-user-display').innerText = email;
+                document.getElementById('login-overlay').style.display = 'none';
+                initMap();
+            } catch (err) {
+                console.warn(err);
+                status.innerHTML = `⚠️ Cloud unavailable (Supabase maintenance)<br><button onclick="enterLocalMode()" class="underline font-bold mt-2 text-indigo-600">Switch to offline mode</button>`;
+                btn.disabled = false; btn.innerText = "START CLOUD JOURNEY";
+            }
+        }
+
+        // offline mode
+        function enterLocalMode() {
+            const email = document.getElementById('explorer-email').value.trim() || 'Guest';
+            userData = JSON.parse(localStorage.getItem('echoatlas_local_cache') || '{}');
+            document.getElementById('current-user-display').innerText = email + " (Local)";
+            document.getElementById('login-overlay').style.display = 'none';
+            initMap();
+        }
+
+        function initMap() {
+            document.getElementById('loading').style.display = 'flex';
+            d3.json("https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson").then(data => {
+                document.getElementById('loading').style.display = 'none';
+                g.selectAll("path").data(data.features).enter().append("path")
+                    .attr("d", pathGen).attr("class", "country")
+                    .attr("id", d => `c-${d.id}`)
+                    .classed("visited", d => userData[d.id])
+                    .on("mouseover", (event, d) => handleTerritoryHover(d.id, true))
+                    .on("mousemove", (event, d) => showTooltip(event, d))
+                    .on("mouseout", (event, d) => { handleTerritoryHover(d.id, false); d3.select("#tooltip").style("opacity", 0); })
+                    .on("click", function(event, d) {
+                        clickPos = d3.pointer(event, g.node());
+                        selectedFeature = d;
+                        document.getElementById('country-name').innerText = d.properties.name;
+                        document.getElementById('panel').classList.remove('hidden');
+                        resetPanelUI();
+                        renderPanelVisits();
+                    });
+                renderAllMarkers(); updateStats(); renderTimeline();
+            });
+        }
+
+        function handleTerritoryHover(id, isOver) {
+            const targets = CHINA_GROUP.includes(id) ? CHINA_GROUP : [id];
+            targets.forEach(tid => d3.select(`#c-${tid}`).classed("country-hover", isOver));
+        }
+
+        // --- 3. heart rating (0.5 step) ---
+        const heartInput = document.getElementById('heart-input');
+        heartInput.addEventListener('mousemove', (e) => {
+            const rect = heartInput.getBoundingClientRect();
+            let val = (Math.ceil(((e.clientX - rect.left) / rect.width) * 10) / 2).toFixed(1);
+            if(val < 0) val = 0; if(val > 5) val = 5;
+            updateHearts(val);
+        });
+        heartInput.addEventListener('click', (e) => {
+            const rect = heartInput.getBoundingClientRect();
+            let val = (Math.ceil(((e.clientX - rect.left) / rect.width) * 10) / 2).toFixed(1);
+            currentRating = val;
+            updateHearts(currentRating);
+        });
+        heartInput.addEventListener('mouseleave', () => updateHearts(currentRating));
+
+        function updateHearts(val) {
+            document.getElementById('rating-val').innerText = `${val} Hearts`;
+            document.querySelectorAll('.heart').forEach((h, i) => {
+                h.classList.remove('full', 'half');
+                if (i + 1 <= val) h.classList.add('full'); else if (i + 0.5 <= val) h.classList.add('half');
+            });
+        }
+
+        // --- 4. save & render ---
+        async function saveDream() {
+            if(!selectedFeature) return;
+            const id = selectedFeature.id;
+            const activeChips = Array.from(document.querySelectorAll('.activity-chip.active'));
+            const customEmojiVal = document.getElementById('custom-emoji').value;
+            let emojiList = [];
+            if (customEmojiVal && customEmojiVal !== "✨") emojiList.push(customEmojiVal);
+            activeChips.forEach(chip => emojiList.push(chip.getAttribute('data-emoji')));
+            if (emojiList.length === 0) emojiList.push("📍");
+
+            const record = { 
+                id: Date.now(), 
+                date: document.getElementById('visit-date').value || new Date().toISOString().split('T')[0], 
+                rating: currentRating, 
+                activities: activeChips.map(c => c.innerText), 
+                emojis: [...new Set(emojiList)], 
+                country: selectedFeature.properties.name,
+                note: document.getElementById('custom-label').value,
+                pos: clickPos 
+            };
+
+            const targets = CHINA_GROUP.includes(id) ? CHINA_GROUP : [id];
+            targets.forEach(tid => {
+                if(!userData[tid]) userData[tid] = [];
+                userData[tid].push(record);
+                d3.select(`#c-${tid}`).classed("visited", true);
+            });
+
+            // persist local cache
+            localStorage.setItem('echoatlas_local_cache', JSON.stringify(userData));
+            
+            const email = localStorage.getItem('echoatlas_email');
+            if (client && email && !email.includes('(Local)')) {
+                try { await client.from('user_memories').upsert({ user_email: email, map_data: userData, updated_at: new Date() }); } catch(e){}
+            }
+
+            renderAllMarkers(); updateStats(); renderTimeline(); closePanel();
+        }
+
+        function renderAllMarkers() {
+            g.selectAll(".marker-text").remove();
+            Object.keys(userData).forEach(id => {
+                const node = g.select(`#c-${id}`);
+                if (node.empty()) return;
+                const feature = node.datum();
+                const fallbackCenter = getVisualCenter(feature);
+                (userData[id] || []).forEach(record => {
+                    const pos = record.pos && record.pos.length === 2 ? record.pos : fallbackCenter;
+                    const emojis = (record.emojis && record.emojis.length) ? record.emojis : ['📍'];
+                    emojis.slice(0, 4).forEach((emoji, i) => {
+                        let x = pos[0], y = pos[1];
+                        if (emojis.length > 1) {
+                            const angle = (i / emojis.length) * Math.PI * 2;
+                            x += Math.cos(angle) * 10; y += Math.sin(angle) * 10;
+                        }
+                        g.append("text").attr("class", "marker-text").attr("transform", `translate(${x}, ${y})`).attr("text-anchor", "middle").attr("dy", "0.35em").style("font-size", "11px").style("pointer-events", "none").style("filter", "drop-shadow(1px 1px 1px rgba(0,0,0,0.15))").text(emoji);
+                    });
+                });
+            });
+        }
+
+        function getVisualCenter(feature) {
+            if (feature.geometry.type === "Polygon") return pathGen.centroid(feature);
+            let largestArea = 0, largestPolygon = null;
+            feature.geometry.coordinates.forEach(coords => {
+                const polyFeature = { type: "Feature", geometry: { type: "Polygon", coordinates: coords } };
+                const area = d3.geoArea(polyFeature);
+                if (area > largestArea) { largestArea = area; largestPolygon = polyFeature; }
+            });
+            return pathGen.centroid(largestPolygon);
+        }
+
+        let timelineFilterYear = 'all';
+
+        function renderTimeline() {
+            const history = Object.values(userData).flat().filter((v, i, a) => a.findIndex(t => t.id === v.id) === i).sort((a,b) => new Date(b.date) - new Date(a.date));
+            const emptyEl = document.getElementById('timeline-empty-hint');
+            const listEl = document.getElementById('timeline-list');
+            const yearFilterEl = document.getElementById('timeline-year-filter');
+            const yearChipsEl = document.getElementById('timeline-year-chips');
+            if (emptyEl) emptyEl.classList.toggle('hidden', history.length > 0);
+            if (listEl) listEl.classList.toggle('hidden', history.length === 0);
+            if (yearFilterEl) yearFilterEl.classList.toggle('hidden', history.length === 0);
+            if (yearChipsEl && history.length > 0) {
+                const years = [...new Set(history.map(h => new Date(h.date).getFullYear()))].sort((a, b) => b - a);
+                yearChipsEl.innerHTML = '<button type="button" class="timeline-year-chip' + (timelineFilterYear === 'all' ? ' active' : '') + '" data-year="all">All</button>' +
+                    years.map(y => '<button type="button" class="timeline-year-chip' + (timelineFilterYear === String(y) ? ' active' : '') + '" data-year="' + y + '">' + y + '</button>').join('');
+            }
+            listEl.innerHTML = history.map(h => {
+                const countryEsc = (h.country || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+                const year = new Date(h.date).getFullYear();
+                const isHidden = timelineFilterYear !== 'all' && String(year) !== timelineFilterYear;
+                return `
+                <div class="timeline-item group relative${isHidden ? ' hidden' : ''}" data-country="${countryEsc}" data-year="${year}">
+                    <button type="button" data-record-id="${h.id}" class="timeline-delete-btn absolute right-0 top-0 z-10 font-bold text-pink-600 hover:underline uppercase opacity-70 hover:opacity-100" title="Delete this record">Delete</button>
+                    <div class="timeline-dot"></div>
+                    <div class="timeline-date mb-1 uppercase text-left">${h.date}</div>
+                    <div class="flex items-baseline gap-4 mb-2"><div class="timeline-country">${h.emojis[0]} ${h.country}</div><div class="text-pink-500 text-xl">${"❤".repeat(Math.floor(h.rating))}${h.rating % 1 ? "½" : ""}</div></div>
+                    <div class="flex flex-wrap gap-2 text-left timeline-activities">${h.activities.map(a => `<span class="bg-indigo-50 px-3 py-1.5 rounded-full border border-indigo-200 text-indigo-900 font-bold">${a}</span>`).join('')}</div>
+                    ${h.note ? `<div class="timeline-note-bubble text-left">"${h.note}"</div>` : ''}
+                </div>`;
+            }).join('');
+        }
+
+        function setTimelineYearFilter(year) {
+            timelineFilterYear = year;
+            const listEl = document.getElementById('timeline-list');
+            const chips = document.querySelectorAll('.timeline-year-chip');
+            chips.forEach(c => c.classList.toggle('active', c.getAttribute('data-year') === year));
+            if (listEl) {
+                listEl.querySelectorAll('.timeline-item').forEach(el => {
+                    const show = year === 'all' || el.getAttribute('data-year') === String(year);
+                    el.classList.toggle('hidden', !show);
+                });
+                const firstVisible = listEl.querySelector('.timeline-item:not(.hidden)');
+                if (firstVisible) firstVisible.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }
+
+        function jumpToMemory(countryName) {
+            const target = g.selectAll("path").filter(d => d && d.properties.name === countryName).datum();
+            if (target) {
+                const center = getVisualCenter(target);
+                svg.transition().duration(1000).call(zoom.transform, d3.zoomIdentity.translate(window.innerWidth/2, window.innerHeight/2).scale(6).translate(-center[0], -center[1]));
+                toggleTimeline();
+            }
+        }
+
+        function updateStats() {
+            const keys = Object.keys(userData);
+            let count = 0, chinaDone = false;
+            keys.forEach(k => { if (CHINA_GROUP.includes(k)) { if (!chinaDone) { count++; chinaDone = true; } } else count++; });
+            document.getElementById('stat-count').innerText = count;
+            document.getElementById('stat-progress').innerText = ((count / 177) * 100).toFixed(1);
+        }
+
+        // delete one visit record (by record.id)
+        async function deleteRecord(recordId) {
+            if (!confirm('Delete this visit record?')) return;
+            const idNum = typeof recordId === 'string' ? parseInt(recordId, 10) : recordId;
+            let changed = false;
+            Object.keys(userData).forEach(tid => {
+                const before = userData[tid].length;
+                userData[tid] = userData[tid].filter(r => r.id !== idNum);
+                if (userData[tid].length === 0) { delete userData[tid]; changed = true; }
+                else if (userData[tid].length !== before) changed = true;
+            });
+            if (!changed) return;
+            localStorage.setItem('echoatlas_local_cache', JSON.stringify(userData));
+            const email = localStorage.getItem('echoatlas_email');
+            if (client && email && !email.includes('(Local)')) {
+                try { await client.from('user_memories').upsert({ user_email: email, map_data: userData, updated_at: new Date() }); } catch(e){}
+            }
+            renderAllMarkers();
+            // refresh visited state on map
+            g.selectAll("path.country").classed("visited", d => userData[d.id] && userData[d.id].length > 0);
+            updateStats();
+            renderTimeline();
+            if (document.getElementById('panel') && !document.getElementById('panel').classList.contains('hidden')) renderPanelVisits();
+        }
+
+        // render existing visits list in panel (with delete)
+        function renderPanelVisits() {
+            const listEl = document.getElementById('panel-visits-list');
+            const sectionEl = document.getElementById('panel-existing-visits');
+            if (!selectedFeature || !listEl) return;
+            const id = selectedFeature.id;
+            const targets = CHINA_GROUP.includes(id) ? CHINA_GROUP : [id];
+            const records = (userData[targets[0]] || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+            if (records.length === 0) {
+                sectionEl.style.display = 'none';
+                listEl.innerHTML = '';
+                return;
+            }
+            sectionEl.style.display = 'block';
+            listEl.innerHTML = records.map(r => `
+                <div class="panel-visit-row flex items-center justify-between gap-2 py-2.5 px-3 bg-indigo-50/80 border border-indigo-200 rounded-lg transition-colors hover:bg-indigo-100/80 hover:border-indigo-300">
+                    <span class="text-sm text-indigo-900 flex-1 truncate">${r.date} · ${(r.emojis && r.emojis[0]) || '📍'} ${r.note ? '“' + (r.note.length > 12 ? r.note.slice(0,12)+'…' : r.note) + '"' : ''}</span>
+                    <button type="button" data-record-id="${r.id}" class="panel-delete-btn shrink-0 text-xs font-bold text-pink-600 hover:underline uppercase">Delete</button>
+                </div>`).join('');
+        }
+
+        function showTooltip(event, d) {
+            const logs = userData[d.id];
+            if (!logs) return;
+            d3.select("#tooltip").style("opacity", 1).style("left", (event.pageX + 15) + "px").style("top", (event.pageY + 15) + "px").html(`<div class="font-bold border-b-2 border-black mb-2 pb-1 text-lg italic text-indigo-900 text-left">${d.properties.name}</div><div class="text-sm text-left text-pink-500 font-bold italic">Visited ${logs.length} Times</div>`);
+        }
+
+        function logout() { localStorage.removeItem('echoatlas_email'); location.reload(); }
+        function closePanel() { document.getElementById('panel').classList.add('hidden'); }
+        function resetPanelUI() { document.getElementById('visit-date').valueAsDate = new Date(); currentRating = 0; updateHearts(0); document.getElementById('custom-emoji').value = "✨"; document.getElementById('custom-label').value = ""; document.querySelectorAll('.activity-chip').forEach(c => c.classList.remove('active')); }
+        document.querySelectorAll('.activity-chip').forEach(chip => chip.onclick = () => chip.classList.toggle('active'));
+        function toggleTimeline() { document.getElementById('timeline-drawer').classList.toggle('open'); }
+        function focusEmoji() { document.getElementById('custom-emoji').select(); }
+
+        // delete buttons: event delegation
+        document.getElementById('timeline-list').addEventListener('click', function(e) {
+            const delBtn = e.target.closest('.timeline-delete-btn');
+            if (delBtn) {
+                e.stopPropagation();
+                e.preventDefault();
+                deleteRecord(delBtn.getAttribute('data-record-id'));
+                return;
+            }
+            const item = e.target.closest('.timeline-item');
+            if (item && item.dataset.country) jumpToMemory(item.dataset.country);
+        });
+        document.getElementById('panel').addEventListener('click', function(e) {
+            const delBtn = e.target.closest('.panel-delete-btn');
+            if (delBtn) {
+                e.preventDefault();
+                deleteRecord(delBtn.getAttribute('data-record-id'));
+            }
+        });
+        document.getElementById('timeline-year-filter').addEventListener('click', function(e) {
+            const chip = e.target.closest('.timeline-year-chip');
+            if (chip) {
+                e.preventDefault();
+                setTimelineYearFilter(chip.getAttribute('data-year'));
+            }
+        });
+
+        window.onload = () => { 
+            const email = localStorage.getItem('echoatlas_email');
+            if (email) { 
+                if(email.includes('(Local)')) enterLocalMode(); 
+                else { document.getElementById('explorer-email').value = email; login(); }
+            }
+        };
+    </script>
+</body>
+</html>
