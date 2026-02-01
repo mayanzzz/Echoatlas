@@ -258,7 +258,15 @@
             try {
                 const { data, error } = await client.from('user_memories').select('map_data').eq('user_email', email).maybeSingle();
                 if (error) throw error;
-                if (data) { userData = data.map_data; } else { await client.from('user_memories').insert({ user_email: email, map_data: {} }); }
+                if (data) {
+                    userData = data.map_data || {};
+                    Object.keys(userData).forEach(cid => {
+                        (userData[cid] || []).forEach(r => {
+                            if (r && !Array.isArray(r.emojis) && r.emojis != null) r.emojis = [String(r.emojis)];
+                            if (r && r.pos && !Array.isArray(r.pos)) r.pos = [Number(r.pos.x) || 0, Number(r.pos.y) || 0];
+                        });
+                    }
+                } else { await client.from('user_memories').insert({ user_email: email, map_data: {} }); }
                 
                 localStorage.setItem('echoatlas_email', email);
                 document.getElementById('current-user-display').innerText = email;
@@ -372,6 +380,13 @@
             renderAllMarkers(); updateStats(); renderTimeline(); closePanel();
         }
 
+        function normalizeEmojis(record) {
+            const raw = record.emojis;
+            if (Array.isArray(raw) && raw.length) return raw.map(e => (e != null ? String(e) : '')).filter(Boolean);
+            if (typeof raw === 'string' && raw.length) return [raw];
+            return ['\uD83D\uDCCD'];
+        }
+
         function renderAllMarkers() {
             g.selectAll(".marker-text").remove();
             Object.keys(userData).forEach(id => {
@@ -380,15 +395,18 @@
                 const feature = node.datum();
                 const fallbackCenter = getVisualCenter(feature);
                 (userData[id] || []).forEach(record => {
-                    const pos = record.pos && record.pos.length === 2 ? record.pos : fallbackCenter;
-                    const emojis = (record.emojis && record.emojis.length) ? record.emojis : ['📍'];
+                    const pos = record.pos && Array.isArray(record.pos) && record.pos.length === 2 ? record.pos : fallbackCenter;
+                    const emojis = normalizeEmojis(record);
                     emojis.slice(0, 4).forEach((emoji, i) => {
                         let x = pos[0], y = pos[1];
                         if (emojis.length > 1) {
                             const angle = (i / emojis.length) * Math.PI * 2;
                             x += Math.cos(angle) * 10; y += Math.sin(angle) * 10;
                         }
-                        g.append("text").attr("class", "marker-text").attr("transform", `translate(${x}, ${y})`).attr("text-anchor", "middle").attr("dy", "0.35em").style("font-size", "11px").style("pointer-events", "none").style("filter", "drop-shadow(1px 1px 1px rgba(0,0,0,0.15))").text(emoji);
+                        g.append("text").attr("class", "marker-text").attr("transform", `translate(${x}, ${y})`).attr("text-anchor", "middle").attr("dy", "0.35em")
+                            .style("font-size", "11px").style("pointer-events", "none").style("filter", "drop-shadow(1px 1px 1px rgba(0,0,0,0.15))")
+                            .style("font-family", "Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif")
+                            .text(emoji);
                     });
                 });
             });
