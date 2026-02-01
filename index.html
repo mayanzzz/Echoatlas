@@ -364,6 +364,7 @@
             activeChips.forEach(chip => emojiList.push(chip.getAttribute('data-emoji')));
             if (emojiList.length === 0) emojiList.push("📍");
 
+            const posGeo = projection.invert && projection.invert(clickPos);
             const record = { 
                 id: Date.now(), 
                 date: document.getElementById('visit-date').value || new Date().toISOString().split('T')[0], 
@@ -372,7 +373,8 @@
                 emojis: [...new Set(emojiList)], 
                 country: selectedFeature.properties.name,
                 note: document.getElementById('custom-label').value,
-                pos: clickPos 
+                pos: clickPos,
+                posGeo: (posGeo && posGeo.length === 2 && isFinite(posGeo[0]) && isFinite(posGeo[1])) ? posGeo : null
             };
 
             const targets = CHINA_GROUP.includes(id) ? CHINA_GROUP : [id];
@@ -401,7 +403,11 @@
                 const feature = node.datum();
                 const fallbackCenter = getVisualCenter(feature);
                 (userData[id] || []).forEach(record => {
-                    const pos = record.pos && record.pos.length === 2 ? record.pos : fallbackCenter;
+                    let pos;
+                    if (record.posGeo && Array.isArray(record.posGeo) && record.posGeo.length === 2 && isFinite(record.posGeo[0]) && isFinite(record.posGeo[1])) {
+                        const p = projection(record.posGeo);
+                        if (p && p.length === 2) pos = p; else pos = fallbackCenter;
+                    } else pos = (record.pos && Array.isArray(record.pos) && record.pos.length === 2) ? record.pos : fallbackCenter;
                     const emojis = (record.emojis && record.emojis.length) ? record.emojis : ['📍'];
                     emojis.slice(0, 4).forEach((emoji, i) => {
                         let x = pos[0], y = pos[1];
