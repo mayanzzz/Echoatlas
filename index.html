@@ -32,13 +32,13 @@
             mix-blend-mode: multiply; opacity: 0.65; z-index: 100;
         }
 
-        /* login overlay */
+        /* login overlay - ensure clicks reach buttons */
         #login-overlay { 
             position: fixed; inset: 0; background: rgba(224, 247, 250, 0.95); 
             display: flex; align-items: center; justify-content: center; z-index: 9000; 
-            backdrop-filter: blur(8px); 
+            backdrop-filter: blur(8px); pointer-events: auto;
         }
-        .login-card { background: white; border: 4px solid var(--ink-black); padding: 40px; box-shadow: 15px 15px 0px var(--ink-black); text-align: center; width: 400px; }
+        .login-card { background: white; border: 4px solid var(--ink-black); padding: 40px; box-shadow: 15px 15px 0px var(--ink-black); text-align: center; width: 400px; pointer-events: auto; }
 
         /* tooltip */
         #tooltip { position: fixed; pointer-events: none; opacity: 0; z-index: 5000; background: white; border: 2px solid var(--ink-black); padding: 12px 14px; box-shadow: 4px 4px 0px var(--ink-black); transition: opacity 0.2s; min-width: 200px; border-radius: 2px; font-family: inherit; }
@@ -247,45 +247,58 @@
 
         // --- 2. login (offline / cloud) ---
         async function login() {
-            const emailInput = document.getElementById('explorer-email');
-            const email = emailInput.value.trim().toLowerCase();
-            const btn = document.getElementById('login-btn');
-            const status = document.getElementById('login-status');
-            if (!email || !email.includes('@')) { status.innerText = "Please enter a valid email!"; return; }
-            
-            btn.innerText = "Syncing memories..."; btn.disabled = true;
-
             try {
+                const emailInput = document.getElementById('explorer-email');
+                const email = (emailInput && emailInput.value) ? emailInput.value.trim().toLowerCase() : '';
+                const btn = document.getElementById('login-btn');
+                const status = document.getElementById('login-status');
+                if (!email || !email.includes('@')) { if (status) status.innerText = "Please enter a valid email!"; return; }
+                if (!client) { if (status) status.innerHTML = 'Cloud unavailable. Use offline mode below.'; return; }
+                if (btn) { btn.innerText = "Syncing memories..."; btn.disabled = true; }
                 const { data, error } = await client.from('user_memories').select('map_data').eq('user_email', email).maybeSingle();
                 if (error) throw error;
                 if (data) {
-                    userData = data.map_data || {};
+                    userData = data.map_data && typeof data.map_data === 'object' ? data.map_data : {};
                     Object.keys(userData).forEach(cid => {
-                        (userData[cid] || []).forEach(r => {
+                        const list = Array.isArray(userData[cid]) ? userData[cid] : [];
+                        list.forEach(r => {
                             if (r && !Array.isArray(r.emojis) && r.emojis != null) r.emojis = [String(r.emojis)];
                             if (r && r.pos && !Array.isArray(r.pos)) r.pos = [Number(r.pos.x) || 0, Number(r.pos.y) || 0];
                         });
-                    }
+                    });
                 } else { await client.from('user_memories').insert({ user_email: email, map_data: {} }); }
-                
                 localStorage.setItem('echoatlas_email', email);
-                document.getElementById('current-user-display').innerText = email;
-                document.getElementById('login-overlay').style.display = 'none';
+                const display = document.getElementById('current-user-display'); if (display) display.innerText = email;
+                const overlay = document.getElementById('login-overlay'); if (overlay) overlay.style.display = 'none';
                 initMap();
             } catch (err) {
                 console.warn(err);
-                status.innerHTML = `⚠️ Cloud unavailable.<br><button onclick="enterLocalMode()" class="underline font-bold mt-2 text-indigo-600">Switch to offline mode</button>`;
-                btn.disabled = false; btn.innerText = "START CLOUD JOURNEY";
+                const status = document.getElementById('login-status');
+                const btn = document.getElementById('login-btn');
+                if (status) status.innerHTML = 'Cloud unavailable. <button type="button" onclick="enterLocalMode()" class="underline font-bold mt-2 text-indigo-600">Enter offline mode</button>';
+                if (btn) { btn.disabled = false; btn.innerText = 'START CLOUD JOURNEY'; }
             }
         }
 
-        // offline mode
         function enterLocalMode() {
-            const email = document.getElementById('explorer-email').value.trim() || 'Guest';
-            userData = JSON.parse(localStorage.getItem('echoatlas_local_cache') || '{}');
-            document.getElementById('current-user-display').innerText = email + " (Local)";
-            document.getElementById('login-overlay').style.display = 'none';
-            initMap();
+            try {
+                const emailEl = document.getElementById('explorer-email');
+                const email = (emailEl && emailEl.value) ? emailEl.value.trim() : 'Guest';
+                if (!email) return;
+                userData = JSON.parse(localStorage.getItem('echoatlas_local_cache') || '{}');
+                if (typeof userData !== 'object' || userData === null) userData = {};
+                const display = document.getElementById('current-user-display');
+                if (display) display.innerText = email + " (Local)";
+                const overlay = document.getElementById('login-overlay');
+                if (overlay) overlay.style.display = 'none';
+                initMap();
+            } catch (e) {
+                console.warn(e);
+                const o = document.getElementById('login-overlay');
+                if (o) o.style.display = 'none';
+                userData = {};
+                initMap();
+            }
         }
 
         function initMap() {
@@ -318,19 +331,19 @@
 
         // --- 3. heart rating (0.5 step) ---
         const heartInput = document.getElementById('heart-input');
-        heartInput.addEventListener('mousemove', (e) => {
+        if (heartInput) heartInput.addEventListener('mousemove', (e) => {
             const rect = heartInput.getBoundingClientRect();
             let val = (Math.ceil(((e.clientX - rect.left) / rect.width) * 10) / 2).toFixed(1);
             if(val < 0) val = 0; if(val > 5) val = 5;
             updateHearts(val);
         });
-        heartInput.addEventListener('click', (e) => {
+        if (heartInput) heartInput.addEventListener('click', (e) => {
             const rect = heartInput.getBoundingClientRect();
             let val = (Math.ceil(((e.clientX - rect.left) / rect.width) * 10) / 2).toFixed(1);
             currentRating = val;
             updateHearts(currentRating);
         });
-        heartInput.addEventListener('mouseleave', () => updateHearts(currentRating));
+        if (heartInput) heartInput.addEventListener('mouseleave', () => updateHearts(currentRating));
 
         function updateHearts(val) {
             document.getElementById('rating-val').innerText = `${val} Hearts`;
@@ -380,13 +393,6 @@
             renderAllMarkers(); updateStats(); renderTimeline(); closePanel();
         }
 
-        function normalizeEmojis(record) {
-            const raw = record.emojis;
-            if (Array.isArray(raw) && raw.length) return raw.map(e => (e != null ? String(e) : '')).filter(Boolean);
-            if (typeof raw === 'string' && raw.length) return [raw];
-            return ['\uD83D\uDCCD'];
-        }
-
         function renderAllMarkers() {
             g.selectAll(".marker-text").remove();
             Object.keys(userData).forEach(id => {
@@ -395,18 +401,15 @@
                 const feature = node.datum();
                 const fallbackCenter = getVisualCenter(feature);
                 (userData[id] || []).forEach(record => {
-                    const pos = record.pos && Array.isArray(record.pos) && record.pos.length === 2 ? record.pos : fallbackCenter;
-                    const emojis = normalizeEmojis(record);
+                    const pos = record.pos && record.pos.length === 2 ? record.pos : fallbackCenter;
+                    const emojis = (record.emojis && record.emojis.length) ? record.emojis : ['📍'];
                     emojis.slice(0, 4).forEach((emoji, i) => {
                         let x = pos[0], y = pos[1];
                         if (emojis.length > 1) {
                             const angle = (i / emojis.length) * Math.PI * 2;
                             x += Math.cos(angle) * 10; y += Math.sin(angle) * 10;
                         }
-                        g.append("text").attr("class", "marker-text").attr("transform", `translate(${x}, ${y})`).attr("text-anchor", "middle").attr("dy", "0.35em")
-                            .style("font-size", "11px").style("pointer-events", "none").style("filter", "drop-shadow(1px 1px 1px rgba(0,0,0,0.15))")
-                            .style("font-family", "Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif")
-                            .text(emoji);
+                        g.append("text").attr("class", "marker-text").attr("transform", `translate(${x}, ${y})`).attr("text-anchor", "middle").attr("dy", "0.35em").style("font-size", "11px").style("pointer-events", "none").style("filter", "drop-shadow(1px 1px 1px rgba(0,0,0,0.15))").text(emoji);
                     });
                 });
             });
